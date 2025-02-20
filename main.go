@@ -1,22 +1,21 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"maps"
-	"math"
 	"os"
 	"runtime/pprof"
+	"sort"
+	"syscall"
 )
 
-type result struct {
-	min   float64
-	max   float64
-	sum   float64
+type stats struct {
+	min   int32
+	max   int32
+	sum   int32
 	count uint64
 }
 
@@ -47,58 +46,82 @@ func main() {
 }
 
 func process(output io.Writer, fileName string) error {
-	file, err := os.Open(fileName)
+	file, err := os.OpenFile(fileName, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	res := make(map[string]*result)
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
 
-	scanner := bufio.NewScanner(file)
+	data, err := syscall.Mmap(int(file.Fd()), 0, int(stat.Size()), syscall.PROT_READ, syscall.MAP_PRIVATE)
+	if err != nil {
+		return err
+	}
+	defer syscall.Munmap(data)
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		// Up to the first ';' is the city, we'll hash that then mod shard it
-		station, tempBytes, hasSemi := bytes.Cut(line, []byte(";"))
-		if !hasSemi {
-			continue
-		}
+	res := NewHashTable(1 << 14)
 
-		temp := bytesToFloat(tempBytes)
+	start := 0
+	hash := newFnvHash()
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		if b == ';' {
+			station := data[start:i]
 
-		stationStr := string(station)
-		s, ok := res[stationStr]
-		if !ok {
-			res[stationStr] = &result{temp, temp, temp, 1}
+			// Find the line end
+			lineEnd := i + 1
+			for ; lineEnd < len(data) && data[lineEnd] != '\n'; lineEnd++ {
+			}
+
+			temp := bytesToFixedPointInt(data[i+1 : lineEnd])
+
+			s := res.get(hash, station)
+			if s == nil {
+				res.add(hash, station, &stats{temp, temp, temp, 1})
+			} else {
+				s.min = min(s.min, temp)
+				s.max = max(s.max, temp)
+				s.sum += temp
+				s.count++
+			}
+
+			// Reset for next line
+			i = lineEnd
+			start = lineEnd + 1
+			hash = newFnvHash()
+		} else if b == '\n' {
+			// Skip newlines
+			start = i + 1
+			hash = newFnvHash()
 		} else {
-			s.min = math.Min(s.min, temp)
-			s.max = math.Max(s.max, temp)
-			s.sum += temp
-			s.count++
+			// Build hash incrementally for station name
+			hash = hashByte(hash, b)
 		}
 
 	}
 
-	stations := make([]string, 0, len(res))
-	for k := range maps.Keys(res) {
-		stations = append(stations, k)
-	}
+	sort.Slice(res.items, func(i, j int) bool {
+		return string(res.items[i].key) < string(res.items[j].key)
+	})
 
 	fmt.Fprint(output, "{")
-	for i, station := range stations {
-		if i > 0 {
-			fmt.Fprint(output, ", ")
+	for _, s := range res.items {
+		if s.value == nil {
+			continue
 		}
-		s := res[station]
-		mean := s.sum / float64(s.count)
-		fmt.Fprintf(output, "%s=%.1f/%.1f/%.1f", station, s.min, mean, s.max)
+		stats := s.value
+		mean := float64(stats.sum) / float64(stats.count) / 10
+		fmt.Fprintf(output, "%s=%.1f/%.1f/%.1f", string(s.key), float64(stats.min)/10, float64(mean)/10, float64(stats.max)/10)
 	}
 	fmt.Print("}\n")
 	return nil
 }
 
-func bytesToFloat(bytes []byte) float64 {
+func bytesToFixedPointInt(bytes []byte) int32 {
 	negative := false
 	idx := 0
 	if bytes[0] == '-' {
@@ -107,25 +130,112 @@ func bytesToFloat(bytes []byte) float64 {
 	}
 
 	// Parse integer part
-	val := 0.0
-	for idx < len(bytes) && bytes[idx] != '.' {
-		val = val*10 + float64(bytes[idx]-'0')
-		idx++
-	}
-
-	// Skip decimal point
+	val := int32(bytes[idx] - '0')
 	idx++
-
-	// Parse decimal part
-	scale := 0.1
-	for idx < len(bytes) {
-		val += float64(bytes[idx]-'0') * scale
-		scale *= 0.1
+	if bytes[idx] != '.' {
+		val = val*10 + int32(bytes[idx]-'0')
 		idx++
 	}
+	idx++ // skip decimal
+	val = val*10 + int32(bytes[idx]-'0')
 
 	if negative {
 		val = -val
 	}
 	return val
+}
+
+func min(a, b int32) int32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int32) int32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+type fnvHash = uint64
+
+const (
+	fnvOffset = 14695981039346656037
+	fnvPrime  = 1099511628211
+)
+
+func newFnvHash() fnvHash {
+	return fnvOffset
+}
+
+func hashByte(h fnvHash, b byte) fnvHash {
+	h *= fnvPrime
+	h = h ^ uint64(b)
+	return h
+}
+
+type item struct {
+	key   []byte
+	value *stats
+}
+
+type hashtable struct {
+	items []item
+	size  uint64
+}
+
+func NewHashTable(numBuckets uint64) *hashtable {
+	return &hashtable{
+		items: make([]item, numBuckets),
+		size:  0,
+	}
+}
+
+func (ht *hashtable) add(hash fnvHash, key []byte, v *stats) {
+	index := hash % uint64(len(ht.items))
+	originalIndex := index
+
+	// Keep probing until we find an empty slot
+	for {
+		if ht.items[index].value == nil {
+			ht.items[index] = item{key: key, value: v}
+			ht.size++
+			return
+		}
+
+		if bytes.Equal(ht.items[index].key, key) {
+			ht.items[index].value = v
+			return
+		}
+
+		index = (index + 1) % uint64(len(ht.items))
+
+		if index == originalIndex {
+			panic("Hashtable is full")
+		}
+	}
+}
+
+func (ht *hashtable) get(hash fnvHash, key []byte) *stats {
+	index := hash % uint64(len(ht.items))
+	originalIndex := index
+
+	// Keep probing until we find the key or an empty slot
+	for {
+		if ht.items[index].value == nil {
+			return nil
+		}
+
+		if bytes.Equal(ht.items[index].key, key) {
+			return ht.items[index].value
+		}
+
+		index = (index + 1) % uint64(len(ht.items))
+
+		if index == originalIndex {
+			return nil
+		}
+	}
 }
