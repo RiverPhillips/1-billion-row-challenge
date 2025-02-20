@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -10,8 +11,6 @@ import (
 	"math"
 	"os"
 	"runtime/pprof"
-	"strconv"
-	"strings"
 )
 
 type result struct {
@@ -59,25 +58,23 @@ func process(output io.Writer, fileName string) error {
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := scanner.Bytes()
 		// Up to the first ';' is the city, we'll hash that then mod shard it
-		station, tempStr, hasSemi := strings.Cut(line, ";")
+		station, tempBytes, hasSemi := bytes.Cut(line, []byte(";"))
 		if !hasSemi {
 			continue
 		}
 
-		tempDouble, err := strconv.ParseFloat(tempStr, 64)
-		if err != nil {
-			return err
-		}
+		temp := bytesToFloat(tempBytes)
 
-		s, ok := res[station]
+		stationStr := string(station)
+		s, ok := res[stationStr]
 		if !ok {
-			res[station] = &result{tempDouble, tempDouble, tempDouble, 1}
+			res[stationStr] = &result{temp, temp, temp, 1}
 		} else {
-			s.min = math.Min(s.min, tempDouble)
-			s.max = math.Max(s.max, tempDouble)
-			s.sum += tempDouble
+			s.min = math.Min(s.min, temp)
+			s.max = math.Max(s.max, temp)
+			s.sum += temp
 			s.count++
 		}
 
@@ -99,4 +96,36 @@ func process(output io.Writer, fileName string) error {
 	}
 	fmt.Print("}\n")
 	return nil
+}
+
+func bytesToFloat(bytes []byte) float64 {
+	negative := false
+	idx := 0
+	if bytes[0] == '-' {
+		idx++
+		negative = true
+	}
+
+	// Parse integer part
+	val := 0.0
+	for idx < len(bytes) && bytes[idx] != '.' {
+		val = val*10 + float64(bytes[idx]-'0')
+		idx++
+	}
+
+	// Skip decimal point
+	idx++
+
+	// Parse decimal part
+	scale := 0.1
+	for idx < len(bytes) {
+		val += float64(bytes[idx]-'0') * scale
+		scale *= 0.1
+		idx++
+	}
+
+	if negative {
+		val = -val
+	}
+	return val
 }
