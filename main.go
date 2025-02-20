@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime/pprof"
 	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -63,7 +64,7 @@ func process(output io.Writer, fileName string) error {
 	}
 	defer syscall.Munmap(data)
 
-	res := NewHashTable(1 << 14)
+	res := NewHashTable(1 << 12)
 
 	start := 0
 	hash := newFnvHash()
@@ -104,20 +105,43 @@ func process(output io.Writer, fileName string) error {
 
 	}
 
-	sort.Slice(res.items, func(i, j int) bool {
-		return string(res.items[i].key) < string(res.items[j].key)
+	// Create slice of just the populated items
+	populated := make([]item, 0, res.size)
+	for _, item := range res.items {
+		if item.value != nil {
+			populated = append(populated, item)
+		}
+	}
+
+	// Sort only the populated items
+	sort.Slice(populated, func(i, j int) bool {
+		return string(populated[i].key) < string(populated[j].key)
 	})
 
-	fmt.Fprint(output, "{")
-	for _, s := range res.items {
-		if s.value == nil {
-			continue
+	// Pre-allocate builder with estimated size
+	var b strings.Builder
+	// Rough estimate: 30 bytes per station (name + numbers + formatting)
+	b.Grow(1 + len(populated)*30 + 1)
+
+	b.WriteByte('{')
+	for i, item := range populated {
+		if i > 0 {
+			b.WriteString(", ")
 		}
-		stats := s.value
+		stats := item.value
 		mean := float64(stats.sum) / float64(stats.count) / 10
-		fmt.Fprintf(output, "%s=%.1f/%.1f/%.1f", string(s.key), float64(stats.min)/10, float64(mean)/10, float64(stats.max)/10)
+
+		b.Write(item.key)
+		fmt.Fprintf(&b, "=%.1f/%.1f/%.1f",
+			float64(stats.min)/10,
+			mean,
+			float64(stats.max)/10)
 	}
-	fmt.Print("}\n")
+	b.WriteString("}\n")
+
+	// Single write to output
+	fmt.Fprint(output, b.String())
+
 	return nil
 }
 
