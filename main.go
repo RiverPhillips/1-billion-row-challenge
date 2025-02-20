@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"runtime/pprof"
 	"sort"
-	"strings"
 	"syscall"
 )
 
@@ -64,7 +64,7 @@ func process(output io.Writer, fileName string) error {
 	}
 	defer syscall.Munmap(data)
 
-	res := NewHashTable(1 << 12)
+	res := NewHashTable(1 << 16)
 
 	start := 0
 	hash := newFnvHash()
@@ -115,33 +115,29 @@ func process(output io.Writer, fileName string) error {
 
 	// Sort only the populated items
 	sort.Slice(populated, func(i, j int) bool {
-		return string(populated[i].key) < string(populated[j].key)
+		return bytes.Compare(populated[i].key, populated[j].key) < 0
 	})
 
-	// Pre-allocate builder with estimated size
-	var b strings.Builder
-	// Rough estimate: 30 bytes per station (name + numbers + formatting)
-	b.Grow(1 + len(populated)*30 + 1)
+	b := bufio.NewWriter(output)
 
+	const div10 = 0.1
 	b.WriteByte('{')
 	for i, item := range populated {
 		if i > 0 {
 			b.WriteString(", ")
 		}
 		stats := item.value
-		mean := float64(stats.sum) / float64(stats.count) / 10
+		mean := float64(stats.sum) / float64(stats.count) * div10
 
 		b.Write(item.key)
-		fmt.Fprintf(&b, "=%.1f/%.1f/%.1f",
-			float64(stats.min)/10,
+		fmt.Fprintf(b, "=%.1f/%.1f/%.1f",
+			float64(stats.min)*div10,
 			mean,
-			float64(stats.max)/10)
+			float64(stats.max)*div10)
 	}
 	b.WriteString("}\n")
 
-	// Single write to output
-	fmt.Fprint(output, b.String())
-
+	b.Flush()
 	return nil
 }
 
