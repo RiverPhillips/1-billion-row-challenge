@@ -64,46 +64,7 @@ func process(output io.Writer, fileName string) error {
 	}
 	defer syscall.Munmap(data)
 
-	res := NewHashTable(1 << 16)
-
-	start := 0
-	hash := newFnvHash()
-	for i := 0; i < len(data); i++ {
-		b := data[i]
-		if b == ';' {
-			station := data[start:i]
-
-			// Find the line end
-			lineEnd := i + 1
-			for ; lineEnd < len(data) && data[lineEnd] != '\n'; lineEnd++ {
-			}
-
-			temp := bytesToFixedPointInt(data[i+1 : lineEnd])
-
-			s := res.get(hash, station)
-			if s == nil {
-				res.add(hash, station, &stats{temp, temp, temp, 1})
-			} else {
-				s.min = min(s.min, temp)
-				s.max = max(s.max, temp)
-				s.sum += temp
-				s.count++
-			}
-
-			// Reset for next line
-			i = lineEnd
-			start = lineEnd + 1
-			hash = newFnvHash()
-		} else if b == '\n' {
-			// Skip newlines
-			start = i + 1
-			hash = newFnvHash()
-		} else {
-			// Build hash incrementally for station name
-			hash = hashByte(hash, b)
-		}
-
-	}
+	res := processData(data, 0, len(data))
 
 	// Create slice of just the populated items
 	populated := make([]item, 0, res.size)
@@ -139,6 +100,50 @@ func process(output io.Writer, fileName string) error {
 
 	b.Flush()
 	return nil
+}
+
+func processData(data []byte, start int, endPos int) *hashtable {
+	res := NewHashTable(1 << 16)
+
+	hash := newFnvHash()
+	for i := start; i < endPos; i++ {
+		b := data[i]
+		if b == ';' {
+			station := data[start:i]
+
+			// Find the line end
+			lineEnd := i + 1
+			for ; lineEnd < len(data) && data[lineEnd] != '\n'; lineEnd++ {
+			}
+
+			temp := bytesToFixedPointInt(data[i+1 : lineEnd])
+
+			s := res.get(hash, station)
+			if s == nil {
+				res.add(hash, station, &stats{temp, temp, temp, 1})
+			} else {
+				s.min = min(s.min, temp)
+				s.max = max(s.max, temp)
+				s.sum += temp
+				s.count++
+			}
+
+			// Reset for next line
+			i = lineEnd
+			start = lineEnd + 1
+			hash = newFnvHash()
+		} else if b == '\n' {
+			// Skip newlines
+			start = i + 1
+			hash = newFnvHash()
+		} else {
+			// Build hash incrementally for station name
+			hash = hashByte(hash, b)
+		}
+
+	}
+	return res
+
 }
 
 func bytesToFixedPointInt(bytes []byte) int32 {
