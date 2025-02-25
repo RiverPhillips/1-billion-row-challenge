@@ -8,8 +8,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"sort"
+	"sync"
 	"syscall"
 )
 
@@ -64,7 +66,38 @@ func process(output io.Writer, fileName string) error {
 	}
 	defer syscall.Munmap(data)
 
-	res := processData(data, 0, len(data))
+	var wg sync.WaitGroup
+	numWorkers := runtime.NumCPU()
+	chunkSize := len(data) / numWorkers
+
+	results := make([]*hashtable, numWorkers)
+
+	blockStart := 0
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+
+		blockEnd := blockStart + chunkSize
+		if i == numWorkers-1 {
+			blockEnd = len(data)
+		} else {
+			for blockEnd < len(data)-1 && data[blockEnd] != '\n' {
+				blockEnd++
+			}
+			if blockEnd < len(data) {
+				blockEnd++
+			}
+		}
+
+		go func(i, blockStart, blockEnd int) {
+			defer wg.Done()
+			results[i] = processData(data, blockStart, blockEnd)
+		}(i, blockStart, blockEnd)
+		blockStart = blockEnd
+	}
+
+	wg.Wait()
+
+	res := mergeHashTables(results)
 
 	// Create slice of just the populated items
 	populated := make([]item, 0, res.size)
@@ -100,6 +133,36 @@ func process(output io.Writer, fileName string) error {
 
 	b.Flush()
 	return nil
+}
+
+func mergeHashTables(tables []*hashtable) *hashtable {
+	res := NewHashTable(1 << 16)
+
+	for _, table := range tables {
+		for _, item := range table.items {
+			if item.value == nil {
+				continue
+			}
+
+			s := res.get(item.hash, item.key)
+			if s == nil {
+				res.add(item.hash, item.key, &stats{
+					max:   item.value.max,
+					min:   item.value.min,
+					sum:   item.value.sum,
+					count: item.value.count,
+				})
+			} else {
+				s.min = min(s.min, item.value.min)
+				s.max = max(s.max, item.value.max)
+				s.sum += item.value.sum
+				s.count += item.value.count
+			}
+
+		}
+	}
+
+	return res
 }
 
 func processData(data []byte, start int, endPos int) *hashtable {
@@ -202,6 +265,7 @@ func hashByte(h fnvHash, b byte) fnvHash {
 }
 
 type item struct {
+	hash  fnvHash
 	key   []byte
 	value *stats
 }
@@ -225,7 +289,7 @@ func (ht *hashtable) add(hash fnvHash, key []byte, v *stats) {
 	// Keep probing until we find an empty slot
 	for {
 		if ht.items[index].value == nil {
-			ht.items[index] = item{key: key, value: v}
+			ht.items[index] = item{key: key, value: v, hash: hash}
 			ht.size++
 			return
 		}
