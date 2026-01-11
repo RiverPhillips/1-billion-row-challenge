@@ -223,41 +223,13 @@ func processData(data []byte, start int, endPos int) *hashtable {
 }
 
 func bytesToFixedPointInt(bytes []byte) int32 {
-	// Optimized for common temperature range [-99.9, 99.9]
-	// Uses length-based fast paths to minimize branches and bounds checks
-
-	length := len(bytes)
-
-	// Fast path for most common cases based on length
-	// Format: "D.D" (3 bytes), "DD.D" (4 bytes), "-D.D" (4 bytes), "-DD.D" (5 bytes)
-
-	if length == 4 {
-		// Either "DD.D" or "-D.D"
-		if bytes[0] == '-' {
-			// "-D.D": negative single digit
-			return -(int32(bytes[1]-'0')*10 + int32(bytes[3]-'0'))
-		}
-		// "DD.D": positive two digits
-		return int32(bytes[0]-'0')*100 + int32(bytes[1]-'0')*10 + int32(bytes[3]-'0')
-	}
-
-	if length == 3 {
-		// "D.D": positive single digit
-		return int32(bytes[0]-'0')*10 + int32(bytes[2]-'0')
-	}
-
-	if length == 5 {
-		// "-DD.D": negative two digits
-		return -(int32(bytes[1]-'0')*100 + int32(bytes[2]-'0')*10 + int32(bytes[4]-'0'))
-	}
-
-	// Fallback for edge cases (shouldn't happen often)
 	negative := bytes[0] == '-'
 	idx := 0
 	if negative {
 		idx++
 	}
 
+	// Parse integer part
 	val := int32(bytes[idx] - '0')
 	idx++
 	if bytes[idx] != '.' {
