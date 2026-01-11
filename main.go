@@ -177,8 +177,9 @@ func processData(data []byte, start int, endPos int) *hashtable {
 
 	i := start
 	for i < endPos {
-		// Use SIMD to find semicolon (processes 32 bytes at a time with AVX2)
-		semicolonPos := findByte(data, i, endPos, ';')
+		semicolonPos := i
+		for ; semicolonPos < endPos && data[semicolonPos] != ';'; semicolonPos++ {
+		}
 		if semicolonPos == endPos {
 			break
 		}
@@ -186,9 +187,12 @@ func processData(data []byte, start int, endPos int) *hashtable {
 		hash := hashBytes(data, i, semicolonPos)
 
 		stationKey := data[i:semicolonPos]
-
-		// Use SIMD to find newline (processes 32 bytes at a time with AVX2)
-		lineEnd := findByte(data, semicolonPos+1, endPos, '\n')
+		lineEnd := semicolonPos + 1
+		for ; lineEnd < endPos; lineEnd++ {
+			if data[lineEnd] == '\n' {
+				break
+			}
+		}
 
 		tempStart := semicolonPos + 1
 		tempBytes := data[tempStart:lineEnd]

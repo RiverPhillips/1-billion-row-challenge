@@ -1,9 +1,3 @@
 1brc
 cpu.prof
-cpu.pgo
 weather_stations.csv
-perf.data
-perf.data.old
-perf-*.txt
-perf-*.data
-*.pgo
