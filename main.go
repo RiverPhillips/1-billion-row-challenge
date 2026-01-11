@@ -271,10 +271,12 @@ func newFnvHash() fnvHash {
 }
 
 func hashBytes(data []byte, start, end int) fnvHash {
-	h := newFnvHash()
+	// FxHash - fast non-cryptographic hash used in high-performance Java 1BRC implementations
+	// More efficient than FNV-1a for short keys (station names avg ~20 bytes)
+	const k = 0x517cc1b727220a95
+	var h fnvHash = 0
 	for i := start; i < end; i++ {
-		h *= fnvPrime
-		h ^= fnvHash(data[i])
+		h = (h ^ fnvHash(data[i])) * k
 	}
 	return h
 }
