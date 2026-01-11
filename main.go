@@ -60,11 +60,14 @@ func process(output io.Writer, fileName string) error {
 		return err
 	}
 
-	data, err := syscall.Mmap(int(file.Fd()), 0, int(stat.Size()), syscall.PROT_READ, syscall.MAP_PRIVATE)
+	data, err := syscall.Mmap(int(file.Fd()), 0, int(stat.Size()), syscall.PROT_READ, syscall.MAP_PRIVATE|syscall.MAP_POPULATE)
 	if err != nil {
 		return err
 	}
 	defer syscall.Munmap(data)
+
+	// Advise the kernel about our sequential access pattern
+	syscall.Madvise(data, syscall.MADV_SEQUENTIAL)
 
 	var wg sync.WaitGroup
 	numWorkers := runtime.NumCPU()
@@ -73,8 +76,8 @@ func process(output io.Writer, fileName string) error {
 	results := make([]*hashtable, numWorkers)
 
 	blockStart := 0
+	wg.Add(numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
 
 		blockEnd := blockStart + chunkSize
 		if i == numWorkers-1 {
@@ -136,7 +139,7 @@ func process(output io.Writer, fileName string) error {
 }
 
 func mergeHashTables(tables []*hashtable) *hashtable {
-	res := NewHashTable(1 << 16)
+	res := NewHashTable(1 << 10)
 
 	for _, table := range tables {
 		for _, item := range table.items {
@@ -166,55 +169,60 @@ func mergeHashTables(tables []*hashtable) *hashtable {
 }
 
 func processData(data []byte, start int, endPos int) *hashtable {
-	res := NewHashTable(1 << 16)
+	res := NewHashTable(1 << 10)
 
-	hash := newFnvHash()
-	for i := start; i < endPos; i++ {
-		b := data[i]
-		if b == ';' {
-			station := data[start:i]
-
-			// Find the line end
-			lineEnd := i + 1
-			for ; lineEnd < len(data) && data[lineEnd] != '\n'; lineEnd++ {
-			}
-
-			temp := bytesToFixedPointInt(data[i+1 : lineEnd])
-
-			s := res.get(hash, station)
-			if s == nil {
-				res.add(hash, station, &stats{temp, temp, temp, 1})
-			} else {
-				s.min = min(s.min, temp)
-				s.max = max(s.max, temp)
-				s.sum += temp
-				s.count++
-			}
-
-			// Reset for next line
-			i = lineEnd
-			start = lineEnd + 1
-			hash = newFnvHash()
-		} else if b == '\n' {
-			// Skip newlines
-			start = i + 1
-			hash = newFnvHash()
-		} else {
-			// Build hash incrementally for station name
-			hash = hashByte(hash, b)
+	i := start
+	for i < endPos {
+		semicolonPos := i
+		for ; semicolonPos < endPos && data[semicolonPos] != ';'; semicolonPos++ {
 		}
+		if semicolonPos == endPos {
+			break
+		}
+
+		hash := hashBytes(data, i, semicolonPos)
+
+		stationKey := data[i:semicolonPos]
+		lineEnd := semicolonPos + 1
+		for ; lineEnd < endPos; lineEnd++ {
+			if data[lineEnd] == '\n' {
+				break
+			}
+		}
+
+		tempStart := semicolonPos + 1
+		tempBytes := data[tempStart:lineEnd]
+		temp := bytesToFixedPointInt(tempBytes)
+
+		s := res.get(hash, stationKey)
+		if s == nil {
+			// Create new stats entry
+			s = &stats{temp, temp, temp, 1}
+			res.add(hash, data[i:semicolonPos], s)
+		} else {
+			// Update existing stats
+			if temp < s.min {
+				s.min = temp
+			}
+			if temp > s.max {
+				s.max = temp
+			}
+			s.sum += temp
+			s.count++
+		}
+
+		// Move to next line
+		i = lineEnd + 1
 
 	}
 	return res
-
 }
 
 func bytesToFixedPointInt(bytes []byte) int32 {
-	negative := false
+	negative := bytes[0] == '-'
 	idx := 0
-	if bytes[0] == '-' {
+	if negative {
 		idx++
-		negative = true
 	}
 
 	// Parse integer part
@@ -228,7 +236,7 @@ func bytesToFixedPointInt(bytes []byte) int32 {
 	val = val*10 + int32(bytes[idx]-'0')
 
 	if negative {
-		val = -val
+		return -val
 	}
 	return val
 }
@@ -258,9 +266,12 @@ func newFnvHash() fnvHash {
 	return fnvOffset
 }
 
-func hashByte(h fnvHash, b byte) fnvHash {
-	h *= fnvPrime
-	h = h ^ uint64(b)
+func hashBytes(data []byte, start, end int) fnvHash {
+	h := newFnvHash()
+	for i := start; i < end; i++ {
+		h *= fnvPrime
+		h ^= fnvHash(data[i])
+	}
 	return h
 }
 
@@ -317,7 +328,7 @@ func (ht *hashtable) get(hash fnvHash, key []byte) *stats {
 			return nil
 		}
 
-		if bytes.Equal(ht.items[index].key, key) {
+		if ht.items[index].hash == hash && bytes.Equal(ht.items[index].key, key) {
 			return ht.items[index].value
 		}
 
