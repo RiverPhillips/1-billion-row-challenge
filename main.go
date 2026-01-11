@@ -177,24 +177,22 @@ func processData(data []byte, start int, endPos int) *hashtable {
 
 	i := start
 	for i < endPos {
-		// Single-pass delimiter scan reduces iterations by ~50%
-		// Find both semicolon and newline in one forward pass
-		semicolonPos := -1
-		lineEnd := i
-		for ; lineEnd < endPos; lineEnd++ {
-			if data[lineEnd] == ';' {
-				semicolonPos = lineEnd
-			} else if data[lineEnd] == '\n' {
-				break
-			}
+		semicolonPos := i
+		for ; semicolonPos < endPos && data[semicolonPos] != ';'; semicolonPos++ {
 		}
-		if semicolonPos == -1 {
+		if semicolonPos == endPos {
 			break
 		}
 
 		hash := hashBytes(data, i, semicolonPos)
 
 		stationKey := data[i:semicolonPos]
+		lineEnd := semicolonPos + 1
+		for ; lineEnd < endPos; lineEnd++ {
+			if data[lineEnd] == '\n' {
+				break
+			}
+		}
 
 		tempStart := semicolonPos + 1
 		tempBytes := data[tempStart:lineEnd]
