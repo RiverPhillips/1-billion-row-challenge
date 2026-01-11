@@ -294,10 +294,7 @@ func NewHashTable(numBuckets uint64) *hashtable {
 }
 
 func (ht *hashtable) add(hash fnvHash, key []byte, v *stats) {
-	// Bitmasking is ~10-15 cycles faster than modulo on modern CPUs
-	// Requires power-of-2 table size (already using 1<<N)
-	mask := uint64(len(ht.items) - 1)
-	index := hash & mask
+	index := hash % uint64(len(ht.items))
 	originalIndex := index
 
 	// Keep probing until we find an empty slot
@@ -313,7 +310,7 @@ func (ht *hashtable) add(hash fnvHash, key []byte, v *stats) {
 			return
 		}
 
-		index = (index + 1) & mask
+		index = (index + 1) % uint64(len(ht.items))
 
 		if index == originalIndex {
 			panic("Hashtable is full")
@@ -322,9 +319,7 @@ func (ht *hashtable) add(hash fnvHash, key []byte, v *stats) {
 }
 
 func (ht *hashtable) get(hash fnvHash, key []byte) *stats {
-	// Bitmasking is ~10-15 cycles faster than modulo on modern CPUs
-	mask := uint64(len(ht.items) - 1)
-	index := hash & mask
+	index := hash % uint64(len(ht.items))
 	originalIndex := index
 
 	// Keep probing until we find the key or an empty slot
@@ -337,7 +332,7 @@ func (ht *hashtable) get(hash fnvHash, key []byte) *stats {
 			return ht.items[index].value
 		}
 
-		index = (index + 1) & mask
+		index = (index + 1) % uint64(len(ht.items))
 
 		if index == originalIndex {
 			return nil
