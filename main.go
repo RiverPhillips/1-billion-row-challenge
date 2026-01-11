@@ -13,7 +13,6 @@ import (
 	"sort"
 	"sync"
 	"syscall"
-	"unsafe"
 )
 
 type stats struct {
@@ -224,46 +223,26 @@ func processData(data []byte, start int, endPos int) *hashtable {
 }
 
 func bytesToFixedPointInt(bytes []byte) int32 {
-	// Unsafe optimization: read multiple bytes at once and decode using bit manipulation
-	// Temperature formats: [-]D.D (3-4 bytes) or [-]DD.D (4-5 bytes)
-	// This eliminates branches and bounds checking in the hot path (1B calls)
-
-	// Read first 8 bytes as uint64 (safe because mmap buffer has extra space)
-	word := *(*uint64)(unsafe.Pointer(&bytes[0]))
-
-	// Extract individual bytes using bit shifting
-	b0 := byte(word)
-	b1 := byte(word >> 8)
-	b2 := byte(word >> 16)
-	b3 := byte(word >> 24)
-	b4 := byte(word >> 32)
-
-	var val int32
-	var neg int32
-
-	if b0 == '-' {
-		neg = -1
-		// Format: -D.D or -DD.D
-		if b2 == '.' {
-			// -D.D: b1=digit, b2='.', b3=digit
-			val = int32(b1-'0')*10 + int32(b3-'0')
-		} else {
-			// -DD.D: b1=digit, b2=digit, b3='.', b4=digit
-			val = int32(b1-'0')*100 + int32(b2-'0')*10 + int32(b4-'0')
-		}
-	} else {
-		neg = 1
-		// Format: D.D or DD.D
-		if b1 == '.' {
-			// D.D: b0=digit, b1='.', b2=digit
-			val = int32(b0-'0')*10 + int32(b2-'0')
-		} else {
-			// DD.D: b0=digit, b1=digit, b2='.', b3=digit
-			val = int32(b0-'0')*100 + int32(b1-'0')*10 + int32(b3-'0')
-		}
+	negative := bytes[0] == '-'
+	idx := 0
+	if negative {
+		idx++
 	}
 
-	return val * neg
+	// Parse integer part
+	val := int32(bytes[idx] - '0')
+	idx++
+	if bytes[idx] != '.' {
+		val = val*10 + int32(bytes[idx]-'0')
+		idx++
+	}
+	idx++ // skip decimal
+	val = val*10 + int32(bytes[idx]-'0')
+
+	if negative {
+		return -val
+	}
+	return val
 }
 
 func min(a, b int32) int32 {
