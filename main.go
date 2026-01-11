@@ -280,10 +280,9 @@ func hashBytes(data []byte, start, end int) fnvHash {
 }
 
 type item struct {
-	hash   fnvHash
-	keyLen int
-	key    []byte
-	value  *stats
+	hash  fnvHash
+	key   []byte
+	value *stats
 }
 
 type hashtable struct {
@@ -303,15 +302,14 @@ func (ht *hashtable) add(hash fnvHash, key []byte, v *stats) {
 	originalIndex := index
 
 	// Keep probing until we find an empty slot
-	keyLen := len(key)
 	for {
 		if ht.items[index].value == nil {
-			ht.items[index] = item{hash: hash, keyLen: keyLen, key: key, value: v}
+			ht.items[index] = item{key: key, value: v, hash: hash}
 			ht.size++
 			return
 		}
 
-		if ht.items[index].keyLen == keyLen && bytes.Equal(ht.items[index].key, key) {
+		if bytes.Equal(ht.items[index].key, key) {
 			ht.items[index].value = v
 			return
 		}
@@ -328,16 +326,13 @@ func (ht *hashtable) get(hash fnvHash, key []byte) *stats {
 	index := hash % uint64(len(ht.items))
 	originalIndex := index
 
-	// Quick length check eliminates most non-matching keys before expensive bytes.Equal
-	keyLen := len(key)
-
 	// Keep probing until we find the key or an empty slot
 	for {
 		if ht.items[index].value == nil {
 			return nil
 		}
 
-		if ht.items[index].hash == hash && ht.items[index].keyLen == keyLen && bytes.Equal(ht.items[index].key, key) {
+		if ht.items[index].hash == hash && bytes.Equal(ht.items[index].key, key) {
 			return ht.items[index].value
 		}
 
