@@ -139,7 +139,9 @@ func process(output io.Writer, fileName string) error {
 }
 
 func mergeHashTables(tables []*hashtable) *hashtable {
-	res := NewHashTable(1 << 10)
+	// Size chosen to keep load factor <2 for ~413k unique stations
+	// 2^18 = 262,144 buckets → load factor ~1.6
+	res := NewHashTable(1 << 18)
 
 	for _, table := range tables {
 		for _, item := range table.items {
@@ -169,7 +171,9 @@ func mergeHashTables(tables []*hashtable) *hashtable {
 }
 
 func processData(data []byte, start int, endPos int) *hashtable {
-	res := NewHashTable(1 << 10)
+	// Per-worker hash table sized for ~34k stations (413k total / 12 CPUs)
+	// 2^14 = 16,384 buckets → load factor ~2.0
+	res := NewHashTable(1 << 14)
 
 	i := start
 	for i < endPos {
